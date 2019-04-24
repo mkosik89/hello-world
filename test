@@ -1,0 +1,1010 @@
+
+# coding: utf-8
+
+# In[1]:
+
+import pandas as pd
+import numpy as np
+from LFK4 import Vol
+from DateUtils_MK import MF_date
+from DV01 import get_spotDV01
+from stratpy.db import pdblp
+from datetime import datetime,timedelta,date
+from dateutil import relativedelta
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
+import matplotlib.mlab as mlab
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure 
+import matplotlib.dates as mdates
+get_ipython().magic('matplotlib inline')
+
+
+# In[2]:
+
+from sklearn.decomposition import PCA
+from sklearn.covariance import EmpiricalCovariance, MinCovDet
+
+
+# In[3]:
+
+from sklearn.model_selection import train_test_split,cross_val_score
+
+
+from sklearn.linear_model import LinearRegression,Lasso,Ridge
+from sklearn.neighbors import KNeighborsClassifier,KNeighborsRegressor
+from sklearn.naive_bayes import GaussianNB, MultinomialNB, BernoulliNB
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn import svm
+from sklearn.model_selection import GridSearchCV
+
+from sklearn.metrics import accuracy_score, classification_report,confusion_matrix
+
+
+# In[4]:
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler,label_binarize
+
+
+# In[5]:
+
+sc = StandardScaler()
+
+
+# In[6]:
+
+us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
+
+# In[7]:
+
+df = pd.DataFrame()
+
+
+# In[8]:
+
+ENDdt= date.today()
+STARTdt = datetime.date(datetime.today() + relativedelta.relativedelta(years=-10))
+
+bbg_ENDdt = str(ENDdt.year) + ENDdt.strftime('%m') + ENDdt.strftime('%d')
+bbg_STARTdt = str(STARTdt.year) + STARTdt.strftime('%m') + STARTdt.strftime('%d')
+
+
+# In[9]:
+
+tickers = ['USSW10 CURNCY','USSW5 CURNCY']
+fields = ['PX_LAST']
+
+
+# In[10]:
+
+def BDH(tickers,fields,startDT,endDT):
+    con = pdblp.BCon(debug=False, port=8194, timeout=5000)
+    con.start()
+    con.debug = False
+    
+    df = pd.DataFrame()
+    
+    df=con.bdh(tickers, fields, startDT, endDT, longdata=False)
+    
+    df.columns = df.columns.map(' '.join)
+    df = df.reset_index()
+
+    con.stop()
+    
+    return df
+
+
+# In[11]:
+
+def BDHR(tickers,fields,startDT,endDT):
+    con = pdblp.BCon(debug=False, port=8194, timeout=5000)
+    con.start()
+    con.debug = False
+    
+    df = pd.DataFrame()
+    
+    df=con.ref_hist(tickers, fields, dates=[startDT, endDT])
+
+    con.stop()
+    
+    return df
+
+
+# In[12]:
+
+tgt = pd.DataFrame()
+tgt = BDH('USPEA10 ICPL Curncy',fields,bbg_STARTdt,bbg_ENDdt)
+#tst=tst.loc[:,['date','value']]
+
+
+# In[13]:
+
+tst = tgt.copy()
+
+
+# In[14]:
+
+tst['Maturity'] = tst['date'].apply(lambda x: MF_date(datetime.date(datetime(x.year, x.month, x.day) + relativedelta.relativedelta(months=+1))))
+tst['Maturity'] = pd.to_datetime(tst['Maturity'])
+
+
+
+# In[15]:
+
+rates = pd.DataFrame()
+fwds = pd.DataFrame()
+
+rates = BDH('USSW10 Curncy','PX_LAST',bbg_STARTdt,bbg_ENDdt)
+#rates['date'] = df['date']
+#rates['spot'] = df['value']
+
+fwds = BDH('USSVAA10 ICPL Curncy','PX_LAST',bbg_STARTdt,bbg_ENDdt)
+#fwds['date'] = df['date']
+#fwds['fwd'] = df['value']
+
+
+# In[16]:
+
+tst['End_Rate'] = tst['Maturity'].map(rates.set_index('date')[rates.columns[1]])
+tst['Start_Rate'] = tst['date'].map(fwds.set_index('date')[fwds.columns[1]])
+tst['dv01'] = tst['Start_Rate'].apply(lambda x: get_spotDV01(x/100,10,.85))
+tst['BE'] = tgt[tgt.columns[1]]/tst['dv01']
+tst['Realized_Move'] = (tst['Start_Rate'] - tst['End_Rate'])*100
+tst = tst.dropna()
+tst['PNL'] = abs(tst['Realized_Move']) - tst['BE']
+
+
+# In[17]:
+
+#tst['End_Rate'] = tst['Maturity'].map(rates.set_index('date')['spot'])
+#tst['Start_Rate'] = tst['date'].map(fwds.set_index('date')['fwd'])
+#tst['dv01'] = tst['Start_Rate'].apply(lambda x: get_spotDV01(x/100,10,.85))
+#tst['BE'] = tst['value']/tst['dv01']
+#tst['Realized_Move'] = (tst['Start_Rate'] - tst['End_Rate'])*100
+#tst = tst.dropna()
+#tst['PNL'] = abs(tst['Realized_Move']) - tst['BE']
+
+
+# In[18]:
+
+tst.head()
+
+
+# In[19]:
+
+tst['PNL'].describe()
+
+
+# In[25]:
+
+plt.hist(tst['PNL'], bins=[-40, -16,-7, 5, 18, 70],facecolor='blue', alpha=0.5)
+
+
+# In[26]:
+
+plt.boxplot(tst['PNL'])
+
+
+# In[27]:
+
+plt.hist(tst['PNL'], 20,facecolor='blue', alpha=0.5)
+
+
+# In[28]:
+
+tst.sort_values(['PNL'],ascending=1).head()
+
+
+# In[29]:
+
+#levels
+
+tickers_lvl = [
+    'USPEA10 ICPL Curncy',
+    'USSW10 Curncy',
+    'USSW2 Curncy',
+    'USSW5 Curncy',
+    'USSW30 Curncy',
+    'USGG10YR Index',
+    'USYC2Y10 Index',
+    'GDBR10 Index',
+    'GECU10YR Index',
+    'GJGB10 Index',
+    'GUKG10 Index',
+    'GACGB10 Index',
+    
+    'EURUSD BGN Curncy',
+    'GBPUSD BGN Curncy',
+    'USDCAD BGN Curncy',
+    'USDJPY BGN Curncy',  
+    
+    
+    
+    'USSN0A10 ICPL Curncy',
+    'USSN0C10 ICPL Curncy',
+    'USSN0110 ICPL Curncy',
+    'EURUSDV1M BGN Curncy',
+    'USDJPYV1M BGN Curncy',
+    'GBPUSDV1M BGN Curncy',
+    'AUDUSDV1M BGN Curncy',
+    'USDCHFV1M BGN Curncy',
+    'USDCADV1M BGN Curncy',
+    'EURUSDV3M BGN Curncy',
+    'USDJPYV3M BGN Curncy',
+    'GBPUSDV3M BGN Curncy',
+    'AUDUSDV3M BGN Curncy',
+    'USDCHFV3M BGN Curncy',
+    'USDCADV3M BGN Curncy',
+    'EURUSD25R1M BGN Curncy',
+    'USDJPY25R1M BGN Curncy',
+    'GBPUSD25R1M BGN Curncy',
+    'AUDUSD25R1M BGN Curncy',
+    'USDCHF25R1M BGN Curncy',
+    'USDCAD25R1M BGN Curncy',
+    
+    
+    
+    
+    'NKY Index',
+    'SPX Index',
+    'UKX Index',
+    'SX5E Index',
+    'HSI Index',
+    
+    
+    'XAU BGN Curncy',
+    'CL1 COMB Comdty',
+    'CO1 Comdty',
+    'HG1 COMB Comdty',
+    'USGGBE10 Index',
+    
+    
+    'CDX IG CDSI GEN 5Y Corp',
+    'CDX HY CDSI GEN 5Y SPRD Corp',
+    'ITRX EUR CDSI GEN 5Y Corp',
+    
+    
+    
+    
+    
+    'VIX Index'
+]
+
+
+# In[30]:
+
+Level = BDH(tickers_lvl,fields,bbg_STARTdt,bbg_ENDdt)
+
+
+# In[31]:
+
+print(len(tickers_lvl))
+print(len(Level.columns))
+
+
+# In[32]:
+
+Level.head()
+
+
+# In[33]:
+
+#changes net
+
+tickers_net = [
+    'USSW10 Curncy',
+    'USSW2 Curncy',
+    'USSW5 Curncy',
+    'USSW30 Curncy',
+    'USGG10YR Index',
+    'USYC2Y10 Index',
+    'GDBR10 Index',
+    'GECU10YR Index',
+    'GJGB10 Index',
+    'GUKG10 Index',
+    'GACGB10 Index',
+    
+    
+    'USSN0A10 ICPL Curncy',
+    'USSN0C10 ICPL Curncy',
+    'USSN0110 ICPL Curncy',
+    'EURUSDV1M BGN Curncy',
+    'USDJPYV1M BGN Curncy',
+    'GBPUSDV1M BGN Curncy',
+    'AUDUSDV1M BGN Curncy',
+    'USDCHFV1M BGN Curncy',
+    'USDCADV1M BGN Curncy',
+    'EURUSDV3M BGN Curncy',
+    'USDJPYV3M BGN Curncy',
+    'GBPUSDV3M BGN Curncy',
+    'AUDUSDV3M BGN Curncy',
+    'USDCHFV3M BGN Curncy',
+    'USDCADV3M BGN Curncy',
+    'EURUSD25R1M BGN Curncy',
+    'USDJPY25R1M BGN Curncy',
+    'GBPUSD25R1M BGN Curncy',
+    'AUDUSD25R1M BGN Curncy',
+    'USDCHF25R1M BGN Curncy',
+    'USDCAD25R1M BGN Curncy',
+    
+
+    
+    'VIX Index',
+    
+    'USGGBE10 Index',
+    
+    
+    'CDX IG CDSI GEN 5Y Corp',
+    'CDX HY CDSI GEN 5Y SPRD Corp',
+    'ITRX EUR CDSI GEN 5Y Corp',
+    
+    'JPEASIGL Index',
+    'JPEASIEM Index',
+    'JPEASIEU Index'
+    
+    
+    
+    
+    
+
+]
+
+
+# In[34]:
+
+#not in change 1m
+tickers_net2 =['GACGB10 Index',
+ 'USGGBE10 Index',
+ 'USSN0C10 ICPL Curncy',
+ 'CDX IG CDSI GEN 5Y Corp',
+ 'USSW30 Curncy',
+ 'GBPUSD25R1M BGN Curncy',
+ 'GECU10YR Index',
+ 'USDJPYV1M BGN Curncy',
+ 'AUDUSDV3M BGN Curncy',
+ 'USDCHF25R1M BGN Curncy',
+ 'EURUSD25R1M BGN Curncy',
+ 'USDCAD25R1M BGN Curncy',
+ 'GJGB10 Index',
+ 'AUDUSD25R1M BGN Curncy',
+ 'JPEASIEM Index',
+ 'USDJPYV3M BGN Curncy',
+ 'USSW2 Curncy',
+ 'JPEASIGL Index',
+ 'USSN0110 ICPL Curncy',
+ 'GBPUSDV3M BGN Curncy',
+ 'USDCHFV3M BGN Curncy',
+ 'USDCADV3M BGN Curncy',
+ 'USSW5 Curncy',
+ 'USDJPY25R1M BGN Curncy',
+ 'USSN0A10 ICPL Curncy',
+ 'VIX Index',
+ 'ITRX EUR CDSI GEN 5Y Corp',
+ 'EURUSDV3M BGN Curncy',
+ 'AUDUSDV1M BGN Curncy',
+ 'USYC2Y10 Index',
+ 'GDBR10 Index',
+ 'USDCHFV1M BGN Curncy',
+ 'GUKG10 Index',
+ 'USDCADV1M BGN Curncy',
+ 'GBPUSDV1M BGN Curncy',
+ 'CDX HY CDSI GEN 5Y SPRD Corp',
+ 'EURUSDV1M BGN Curncy',
+ 'USSW10 Curncy',
+ 'JPEASIEU Index',
+ 'USGG10YR Index']
+
+
+# In[35]:
+
+net5d = BDH(tickers_net,'CHG_NET_5D',bbg_STARTdt,bbg_ENDdt)
+net1M = BDH(tickers_net,'CHG_NET_1M',bbg_STARTdt,bbg_ENDdt)
+
+
+# In[36]:
+
+print(len(tickers_net))
+print(len(net5d.columns))
+print(len(net1M.columns))
+
+
+# In[37]:
+
+l =[]
+for x in net1M.columns:
+    for y in tickers_net:
+        if x.find(y) < 0:
+            l.append(y)
+    
+
+
+# In[38]:
+
+list(set(l))
+
+
+# In[39]:
+
+# changes %
+
+tickers_per = [
+    'USPEA10 ICPL Curncy',
+
+    
+    
+    'EURUSD BGN Curncy',
+    'GBPUSD BGN Curncy',
+    'USDCAD BGN Curncy',
+    'USDJPY BGN Curncy',  
+    
+    'NKY Index',
+    'SPX Index',
+    'UKX Index',
+    'SX5E Index',
+    'HSI Index',
+    
+    'XAU BGN Curncy',
+    'CL1 COMB Comdty',
+    'CO1 Comdty',
+    'HG1 COMB Comdty'
+
+]
+
+
+# In[40]:
+
+percent5d = BDH(tickers_per,'CHG_PCT_5D',bbg_STARTdt,bbg_ENDdt)
+percent1M = BDH(tickers_per,'CHG_PCT_1M',bbg_STARTdt,bbg_ENDdt)
+
+
+# In[41]:
+
+print(len(tickers_per))
+print(len(percent5d.columns))
+print(len(percent1M.columns))
+
+
+# In[42]:
+
+l2 =[]
+for x in percent1M.columns:
+    for y in tickers_per:
+        if x.find(y) < 0:
+            l2.append(y)
+
+
+# In[43]:
+
+list(set(l2))
+
+
+# In[174]:
+
+percent1M['date'].dtype
+
+
+# In[45]:
+
+# tickers not in 1m 
+tickers_per2 = ['USDCAD BGN Curncy',
+ 'CL1 COMB Comdty',
+ 'EURUSD BGN Curncy',
+ 'HG1 COMB Comdty',
+ 'GBPUSD BGN Curncy',
+ 'USDJPY BGN Curncy',
+ 'XAU BGN Curncy',
+ 'SX5E Index',
+ 'UKX Index',
+ 'NKY Index',
+ 'SPX Index',
+ 'USPEA10 ICPL Curncy',
+ 'HSI Index',
+ 'CO1 Comdty']
+
+
+# In[46]:
+
+tickers_RSI =['USDCAD BGN Curncy',
+ 'CL1 COMB Comdty',
+ 'EURUSD BGN Curncy',
+ 'HG1 COMB Comdty',
+ 'GBPUSD BGN Curncy',
+ 'USDJPY BGN Curncy',
+ 'XAU BGN Curncy',
+ 'SX5E Index',
+ 'UKX Index',
+ 'NKY Index',
+ 'SPX Index',
+ 'USPEA10 ICPL Curncy',
+ 'HSI Index',
+ 'CO1 Comdty',            
+ 'GACGB10 Index',
+ 'USGGBE10 Index',
+ 'USSN0C10 ICPL Curncy',
+ 'CDX IG CDSI GEN 5Y Corp',
+ 'USSW30 Curncy',
+ 'GBPUSD25R1M BGN Curncy',
+ 'GECU10YR Index',
+ 'USDJPYV1M BGN Curncy',
+ 'AUDUSDV3M BGN Curncy',
+ 'USDCHF25R1M BGN Curncy',
+ 'EURUSD25R1M BGN Curncy',
+ 'USDCAD25R1M BGN Curncy',
+ 'GJGB10 Index',
+ 'AUDUSD25R1M BGN Curncy',
+ 'JPEASIEM Index',
+ 'USDJPYV3M BGN Curncy',
+ 'USSW2 Curncy',
+ 'JPEASIGL Index',
+ 'USSN0110 ICPL Curncy',
+ 'GBPUSDV3M BGN Curncy',
+ 'USDCHFV3M BGN Curncy',
+ 'USDCADV3M BGN Curncy',
+ 'USSW5 Curncy',
+ 'USDJPY25R1M BGN Curncy',
+ 'USSN0A10 ICPL Curncy',
+ 'VIX Index',
+ 'ITRX EUR CDSI GEN 5Y Corp',
+ 'EURUSDV3M BGN Curncy',
+ 'AUDUSDV1M BGN Curncy',
+ 'USYC2Y10 Index',
+ 'GDBR10 Index',
+ 'USDCHFV1M BGN Curncy',
+ 'GUKG10 Index',
+ 'USDCADV1M BGN Curncy',
+ 'GBPUSDV1M BGN Curncy',
+ 'CDX HY CDSI GEN 5Y SPRD Corp',
+ 'EURUSDV1M BGN Curncy',
+ 'USSW10 Curncy',
+ 'JPEASIEU Index',
+ 'USGG10YR Index']
+
+
+# In[47]:
+
+RSI = BDH(tickers_RSI,'RSI_30D',bbg_STARTdt,bbg_ENDdt)
+
+
+# In[62]:
+
+all_data = pd.DataFrame()
+all_features = pd.DataFrame()
+all_features = pd.merge(net5d,net1M,on='date')
+all_features = pd.merge(all_features,percent5d,on='date')
+all_features = pd.merge(all_features,percent1M,on='date')
+all_features = pd.merge(all_features,RSI,on='date')
+all_features = pd.merge(all_features,Level,on='date')
+all_features = all_features.dropna()
+all_data = pd.merge(all_features,tst, on='date')
+
+
+# In[63]:
+
+all_data = all_data.dropna()
+
+
+# In[64]:
+
+all_data['PNL'] = all_data['date'].map(tst.set_index('date')['PNL'])
+
+
+# In[ ]:
+
+def pnl_pay(x):
+    if x > 17:
+        y = "Buy"
+    elif x < -10:
+        y = "Sell"
+    else:
+        y = "Neutral"
+    return y
+
+
+# In[65]:
+
+def pnl_pay(x):
+    if x > 18:
+        y = "Strong Buy"
+    elif 5<=x<=18:
+        y = "Weak Buy"
+    elif  -16<= x <= -7:
+        y = "Weak Sell"
+    elif x < -16:
+        y = "Strong Sell"
+    else:
+        y = "Neutral"
+    return y
+
+
+# In[53]:
+
+def pnl_pay(x):
+    if x > 18:
+        y = 1
+    elif 5<=x<=18:
+        y = .5
+    elif  -16<= x <= -7:
+        y = -.5
+    elif x < -16:
+        y = -1
+    else:
+        y = 0
+    return y
+
+
+# In[66]:
+
+all_data['PNL'] = all_data['PNL'].apply(pnl_pay)
+
+
+# In[67]:
+
+all_data['PNL'].describe()
+
+
+# In[ ]:
+
+
+
+
+# In[68]:
+
+features = all_data.iloc[:,1:194]
+labels  = all_data['PNL']
+
+
+# In[81]:
+
+x1,x2,y1,y2,idx1,idx2 =train_test_split(features, labels, all_data['date'], train_size =0.6,shuffle=False)
+
+
+# In[82]:
+
+x1 = sc.fit_transform(x1)
+x2 = sc.transform(x2)
+
+
+# In[59]:
+
+gnb = GaussianNB()
+KNN = KNeighborsClassifier(n_neighbors=1)
+KNR = KNeighborsRegressor(n_neighbors=20)
+MNB = MultinomialNB()
+BNB = BernoulliNB()
+LR = LogisticRegression()
+SDG = SGDClassifier()
+
+
+# In[ ]:
+
+gnb.fit(x1, y1)
+y2_GNB_model = gnb.predict(x2)
+print("GaussianNB Accuracy :", accuracy_score(y2, y2_GNB_model))
+
+KNN.fit(x1,y1)
+y2_KNN_model = KNN.predict(x2)
+print("KNN Accuracy :", accuracy_score(y2, y2_KNN_model))
+
+BNB.fit(x1,y1)
+y2_BNB_model = BNB.predict(x2)
+print("BNB Accuracy :", accuracy_score(y2, y2_BNB_model))
+
+LR.fit(x1,y1)
+y2_LR_model = LR.predict(x2)
+print("LR Accuracy :", accuracy_score(y2, y2_LR_model))
+
+SDG.fit(x1,y1)
+y2_SDG_model = SDG.predict(x2)
+print("SDG Accuracy :", accuracy_score(y2, y2_SDG_model))
+
+
+# In[ ]:
+
+SVC2 = svm.SVC(gamma='scale')
+SVC2.fit(x1, y1)
+pred = SVC2.predict(x2)
+print(accuracy_score(y2,pred))
+#print(confusion_matrix(y2,pred))
+pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[ ]:
+
+param_grid = {'C':[1,10,100,1000],'gamma':[1,0.1,0.001,0.0001], 'kernel':['linear','rbf']}
+grid = GridSearchCV(svm.SVC(),param_grid,refit = True, verbose=2)
+
+
+# In[ ]:
+
+param_grid = {'C':[1,10,100,1000],'gamma':[1,0.1,0.001,0.0001], 'kernel':['linear','rbf']}
+grid = GridSearchCV(svm.SVC(),param_grid,refit = True, verbose=2)
+grid.fit(x1, y1)
+
+
+# In[ ]:
+
+grid.best_params_
+
+
+# In[ ]:
+
+pred=grid.predict(x2)
+print(accuracy_score(y2,pred))
+#print(confusion_matrix(y2,pred))
+pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[257]:
+
+neigh = KNeighborsClassifier(n_neighbors=20,weights='distance')
+neigh.fit(x1, y1)
+pred = neigh.predict(x2)
+print(neigh.score(x2,y2))
+print(accuracy_score(y2,pred))
+#print(confusion_matrix(y2,pred))
+pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[68]:
+
+neigh = KNeighborsRegressor(n_neighbors=20,weights='distance')
+neigh.fit(x1, y1)
+pred = neigh.predict(x2)
+#print(accuracy_score(y2,pred))
+#print(confusion_matrix(y2,pred))
+#pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[165]:
+
+svmregress = svm.SVR(kernel='rbf',C=9,gamma=10)
+svmregress.fit(x2,y2) 
+svmregress.score(x2,y2)
+
+
+# In[157]:
+
+param_grid = {'C': np.arange(5, 10,1),
+             'gamma':np.arange(0, 101,10) }
+
+
+# In[158]:
+
+svm_grid = GridSearchCV(svmregress, param_grid, cv=5)
+
+
+# In[159]:
+
+svm_grid.fit(features, labels)
+
+
+# In[161]:
+
+svm_grid.best_params_
+
+
+# In[69]:
+
+cross_val_score(neigh, features, labels, cv=5)
+
+
+# In[83]:
+
+ridge = Ridge(alpha = .003)
+
+
+# In[111]:
+
+ridge.fit(x1,y1)
+ridge.score(x1,y1)
+
+
+# In[255]:
+
+svmclass = svm.SVC()
+svmclass.fit(x1,y1)
+pred = svmclass.predict(x2)
+pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+
+
+
+# In[167]:
+
+plt.figure(figsize=(12,5))
+plt.plot(idx2,(y2-ridge.predict(x2)))
+#plt.plot(idx2,(y2),'r-')
+#plt.plot(idx2,svmregress.predict(x2))
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+out2 =pd.DataFrame()
+out2['Actual']=y2
+out2['Pred'] = pred
+out2.index = idx2
+out2[out2['Pred']=="Strong Buy"].sort_values(['date'])
+
+
+# In[ ]:
+
+param_grid = {'n_neighbors': np.arange(1, 25)}
+
+
+# In[ ]:
+
+knn_gscv = GridSearchCV(neigh, param_grid, cv=5)
+
+
+# In[ ]:
+
+knn_gscv.fit(features, labels)
+
+
+# In[ ]:
+
+knn_gscv.best_params_
+
+
+# In[173]:
+
+
+
+
+# In[207]:
+
+featuresPCA = features - features.shift(1)
+featuresPCA = featuresPCA.dropna()
+
+
+# In[221]:
+
+featuresPCA_std = pd.DataFrame(sc.fit_transform(featuresPCA),columns=featuresPCA.columns)
+
+
+# In[ ]:
+
+
+
+
+# In[186]:
+
+cov = np.cov(featuresPCA_std.T)
+
+
+# In[237]:
+
+pca = PCA()
+P=pca.fit_transform(featuresPCA_std)
+
+
+# In[239]:
+
+plt.bar(range(193),pca.explained_variance_ratio_)
+plt.title('var ratio explained by pc')
+plt.show()
+
+
+# In[242]:
+
+components = pd.DataFrame(pca.components_.T,index=featuresPCA.columns,columns=pca.explained_variance_ratio_)
+
+
+# In[243]:
+
+components.head()
+
+
+# In[ ]:
+
+
+
+
+# In[ ]:
+
+
+
+
+# In[102]:
+
+weights = {
+    'Neutral':0,
+    'Strong Buy':1,
+    'Strong Sell':-1,
+    'Weak Buy':.5,
+    'Weak Sell':-.5    
+}
+
+
+# In[240]:
+
+SDG = SGDClassifier(loss='log',alpha=.001,n_iter=1000)
+
+
+# In[241]:
+
+SDG.fit(x1,y1)
+SDG.score(x1,y1)
+
+
+# In[258]:
+
+pred = SDG.predict(x2)
+pd.crosstab(y2, pred, rownames=['Actual'], colnames=['Predicted'], margins=True)
+
+
+# In[243]:
+
+SDG.predict_proba(x2).shape
+
+
+# In[244]:
+
+SDG.classes_
+
+
+# In[245]:
+
+weights=np.array([[0,1,-1,.5,-.5]])
+
+
+# In[246]:
+
+out = pd.DataFrame(np.dot(SDG.predict_proba(x2),weights.T),columns=['Pred'],index=idx2)
+
+
+# In[254]:
+
+print(SDG.predict_proba(x2[3:4]))
+print(SDG.predict(x2[3:4]))
+
+
+# In[ ]:
+
+
+
+
+# In[247]:
+
+out['Actual'] = y2.values
+
+
+# In[248]:
+
+plt.hist(out['Pred'], 20,facecolor='blue', alpha=0.5)
+
+
+# In[249]:
+
+out[out['Pred']>.5]
+
+
+# In[ ]:
+
+
+
